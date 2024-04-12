@@ -150,10 +150,12 @@ class ConvBlock(nn.Module):
         super(ConvBlock, self).__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(mid_channels, affine=True, track_running_stats=True),
+            nn.InstanceNorm2d(mid_channels),
+            #nn.BatchNorm2d(mid_channels, affine=True, track_running_stats=True),
             nn.ReLU(),
             nn.Conv2d(mid_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels, affine=True, track_running_stats=True),
+            nn.InstanceNorm2d(out_channels),
+            #nn.BatchNorm2d(out_channels, affine=True, track_running_stats=True),
             nn.ReLU()
         )
   
@@ -167,10 +169,12 @@ class DeconvBlock(nn.Module):
         super(DeconvBlock, self).__init__()
         self.deconv = nn.Sequential(
             torch.nn.ConvTranspose2d(in_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(mid_channels, affine=True, track_running_stats=True),
+            nn.InstanceNorm2d(mid_channels),
+            #nn.BatchNorm2d(mid_channels, affine=True, track_running_stats=True),
             nn.ReLU(),
             torch.nn.ConvTranspose2d(mid_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels, affine=True, track_running_stats=True),
+            nn.InstanceNorm2d(out_channels),
+            #nn.BatchNorm2d(out_channels, affine=True, track_running_stats=True),
             nn.ReLU()
         )
 
@@ -209,17 +213,18 @@ class Discriminator(nn.Module):
         
         self.discriminator = nn.Sequential(
             nn.Conv2d(in_channels, ndf, kernel_size=4, stride=2, bias=False),
-            nn.LeakyReLU(inplace=True),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(ndf, ndf*2, kernel_size=4, stride=2, bias=False),
             nn.InstanceNorm2d(ndf*2),
-            nn.LeakyReLU(inplace=True),
+            nn.LeakyReLU(0.2,inplace=True),
             nn.Conv2d(ndf*2, ndf*4, kernel_size=4, stride=2, bias=False),
             nn.InstanceNorm2d(ndf*4),
-            nn.LeakyReLU(inplace=True),
+            nn.LeakyReLU(0.2,inplace=True),
             nn.Conv2d(ndf*4, ndf*8, kernel_size=4, stride=1, bias=False),
             nn.InstanceNorm2d(ndf*8),
-            nn.LeakyReLU(inplace=True),
-            nn.Conv2d(ndf*8, 1, kernel_size=4, stride=1, bias=False)          
+            nn.LeakyReLU(0.2,inplace=True),
+            nn.Conv2d(ndf*8, 1, kernel_size=4, stride=1, bias=False),     
+            nn.Sigmoid()               
         )
 
   
@@ -258,14 +263,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--path-data", type=str, default="/data2/youngju/CycleGAN/AAPM_data")
     parser.add_argument("--path-checkpoint", type=str, default="/data2/youngju/CycleGAN/CT_denoising")
-    parser.add_argument("--model-name", type=str, default="cyclegan_v7")
+    parser.add_argument("--model-name", type=str, default="cyclegan_v16")
     parser.add_argument("--num_epoch", type=int, default=100)
-    parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--lr", type=float, default=1e-5) # 2e-4,5
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--lr", type=float, default=1e-4) # 2e-4,5
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda:5")
-    parser.add_argument("--G_ndf", type=int, default=64)
-    parser.add_argument("--G_n_res_blocks", type=int, default=8)
+    parser.add_argument("--G_ngf", type=int, default=32)
+    parser.add_argument("--G_n_res_blocks", type=int, default=6)
     parser.add_argument("--D_ndf", type=int, default=64)
     parser.add_argument("--lambda_cycle", type=int, default=10)
     parser.add_argument("--lambda_iden", type=int, default=5)
@@ -294,12 +299,12 @@ def main():
   
     in_channels = train_dataloader.dataset[0][0].shape[0]
     out_channels = train_dataloader.dataset[0][0].shape[0]
-    G_ndf = args.G_ndf
+    G_ngf = args.G_ngf
     D_ndf = args.D_ndf
     n_res_blocks = args.G_n_res_blocks
   
-    G_F2Q = Generator(in_channels, out_channels, G_ndf, n_res_blocks).to(args.device)
-    G_Q2F = Generator(in_channels, out_channels, G_ndf, n_res_blocks).to(args.device)
+    G_F2Q = Generator(in_channels, out_channels, G_ngf, n_res_blocks).to(args.device)
+    G_Q2F = Generator(in_channels, out_channels, G_ngf, n_res_blocks).to(args.device)
     D_F = Discriminator(in_channels, D_ndf).to(args.device)
     D_Q = Discriminator(in_channels, D_ndf).to(args.device)
     
@@ -307,6 +312,8 @@ def main():
 
     G_optim = torch.optim.Adam(itertools.chain(G_F2Q.parameters(), G_Q2F.parameters()), args.lr, betas=(args.beta1, args.beta2))
     D_optim = torch.optim.Adam(itertools.chain(D_F.parameters(), D_Q.parameters()), args.lr, betas=(args.beta1, args.beta2))
+    
+    #step_scheduler = torch.optim.lr_scheduler.StepLR(G_optim, step_size=1, gamma=0.96)
 
     adv_loss = nn.MSELoss()
     cycle_loss = nn.L1Loss()
@@ -331,8 +338,11 @@ def main():
     
     for epoch in tqdm(range(trained_epoch, args.num_epoch), desc='Epoch', total=args.num_epoch, initial=trained_epoch):
         losses = {name: Mean() for name in loss_name}
-        e_adv_loss_F = []
-        e_adv_loss_Q = []
+        e_G_adv_loss_F = []
+        e_G_adv_loss_Q = []
+        e_D_adv_loss_F = []
+        e_D_adv_loss_Q = []
+        
         for x_F, x_Q, _ in tqdm(train_dataloader, desc='Step'):
             x_F = x_F.to(args.device)
             x_Q = x_Q.to(args.device)
@@ -346,11 +356,11 @@ def main():
                 p_F.requires_grad = False
             for p_Q in D_Q.parameters():
                 p_Q.requires_grad = False
-
+                
             x_FQ = G_F2Q(x_F)
             x_QF = G_Q2F(x_Q)
-            x_QFQ = G_F2Q(x_FQ)
-            x_FQF = G_Q2F(x_QF)
+            x_FQF = G_Q2F(x_FQ)
+            x_QFQ = G_F2Q(x_QF)
             x_QQ = G_F2Q(x_Q)
             x_FF = G_Q2F(x_F)
 
@@ -363,37 +373,36 @@ def main():
             G_cycle_loss_Q = cycle_loss(x_QFQ, x_Q)
             G_iden_loss_F = iden_loss(x_FF, x_F)
             G_iden_loss_Q = iden_loss(x_QQ, x_Q)
-            G_adv_loss = G_adv_loss_F + G_adv_loss_Q
+            #G_adv_loss = G_adv_loss_F + G_adv_loss_Q
             G_cycle_loss = G_cycle_loss_F + G_cycle_loss_Q
             G_iden_loss = G_iden_loss_F + G_iden_loss_Q
             G_total_loss = G_adv_loss_F + G_adv_loss_Q + args.lambda_cycle * (G_cycle_loss) + args.lambda_iden * (G_iden_loss)
-            e_adv_loss_F.append(G_adv_loss_F.item())
-            e_adv_loss_Q.append(G_adv_loss_Q.item())
+            e_G_adv_loss_F.append(G_adv_loss_F.item())
+            e_G_adv_loss_Q.append(G_adv_loss_Q.item())
             #print(G_adv_loss.item())
             G_optim.zero_grad()
             G_total_loss.backward()
             G_optim.step()
-            
-            # for p_F in G_Q2F.parameters():
-            #     p_F.requires_grad = False
-            # for p_Q in G_F2Q.parameters():
-            #     p_Q.requires_grad = False
+            #step_scheduler.step()
+
                 
             for p_F in D_F.parameters():
                 p_F.requires_grad = True
             for p_Q in D_Q.parameters():
                 p_Q.requires_grad = True
             
-            x_FQ = G_F2Q(x_F)
-            x_QF = G_Q2F(x_Q)
+            #x_FQ = G_F2Q(x_F)
+            #x_QF = G_Q2F(x_Q)
             D_F_x_F = D_F(x_F)
             D_Q_x_Q = D_Q(x_Q)
-            D_F_x_Q_F = D_F(x_QF)
-            D_Q_x_F_Q = D_F(x_FQ)
+            D_F_x_Q_F = D_F(x_QF.detach())
+            D_Q_x_F_Q = D_Q(x_FQ.detach())
             D_adv_loss_F = adv_loss(D_F_x_F,torch.ones(D_F_x_F.size()).to(args.device)) + adv_loss(D_F_x_Q_F,torch.zeros(D_F_x_Q_F.size()).to(args.device))
             D_adv_loss_Q = adv_loss(D_Q_x_Q,torch.ones(D_Q_x_Q.size()).to(args.device)) + adv_loss(D_Q_x_F_Q,torch.zeros(D_Q_x_F_Q.size()).to(args.device))
             D_total_loss_F = D_adv_loss_F / 2.0
             D_total_loss_Q = D_adv_loss_Q / 2.0
+            e_D_adv_loss_F.append(D_adv_loss_F.item())
+            e_D_adv_loss_Q.append(D_adv_loss_Q.item())
             
             D_optim.zero_grad()
             D_total_loss_F.backward()
@@ -414,12 +423,12 @@ def main():
             
         torch.save({'epoch': epoch + 1, 'G_F2Q_state_dict': G_F2Q.state_dict(), 'G_Q2F_state_dict': G_Q2F.state_dict(),
             'D_F_state_dict': D_F.state_dict(), 'D_Q_state_dict': D_Q.state_dict(),
-            'G_optim_state_dict': G_optim.state_dict(), 'D_optim_state_dict': D_optim.state_dict()}, join(path_result, args.model_name + '.pth'))
+            'G_optim_state_dict': G_optim.state_dict(), 'D_optim_state_dict': D_optim.state_dict()}, join(path_result, args.model_name + f'_e-{epoch}.pth'))
         
         for name in loss_name:
             torch.save(losses_list[name], join(path_result, name + '.npy'))
         
-        print(f'🔥🔥🔥🔥 ADV-LOSS-e-{epoch}: F: {np.mean(e_adv_loss_F)} / Q: {np.mean(e_adv_loss_Q)}')
+        print(f'🔥🔥🔥🔥 ADV-LOSS-e-{epoch}: G_F: {np.mean(e_G_adv_loss_F)} / G_Q: {np.mean(e_G_adv_loss_Q)} / D_F: {np.mean(e_D_adv_loss_F)} / D_Q: {np.mean(e_D_adv_loss_Q)}')
     
 if __name__ == "__main__":
     main()
