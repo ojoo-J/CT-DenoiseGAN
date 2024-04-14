@@ -107,30 +107,11 @@ def make_dataloader(path, batch_size):
 
     return train_dataloader, test_dataloader
 
-
-
-# class ResnetBlock(torch.nn.Module):
-#     def __init__(self, in_channels, mid_channels, out_channels):
-#         super(ResnetBlock, self).__init__()
-        
-#         self.res_block = nn.Sequential(
-#             #nn.ReflectionPad2d(1),
-#             nn.Conv2d(in_channels, mid_channels, kernel_size=3),
-#             nn.InstanceNorm2d(mid_channels),
-#             nn.ReLU(),
-#             #nn.ReflectionPad2d(1),
-#             nn.Conv2d(mid_channels, out_channels, kernel_size=3),
-#             nn.InstanceNorm2d(out_channels),
-#         )
-
-#     def forward(self, x):
-#         out = x + self.res_block(x)
-#         return out
     
 class ResnetBlock(torch.nn.Module):
     def __init__(self, n_channels):
         super(ResnetBlock, self).__init__()
-        
+        # Resnet-based Block
         self.res_block = nn.Sequential(
             nn.ReflectionPad2d(1),
             nn.Conv2d(n_channels, n_channels, kernel_size=3),
@@ -148,14 +129,13 @@ class ResnetBlock(torch.nn.Module):
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, mid_channels, out_channels):
         super(ConvBlock, self).__init__()
+        # includes two convolution layers
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
             nn.InstanceNorm2d(mid_channels),
-            #nn.BatchNorm2d(mid_channels, affine=True, track_running_stats=True),
             nn.ReLU(),
             nn.Conv2d(mid_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
             nn.InstanceNorm2d(out_channels),
-            #nn.BatchNorm2d(out_channels, affine=True, track_running_stats=True),
             nn.ReLU()
         )
   
@@ -167,14 +147,13 @@ class ConvBlock(nn.Module):
 class DeconvBlock(nn.Module):
     def __init__(self, in_channels, mid_channels, out_channels):
         super(DeconvBlock, self).__init__()
+        # includes two transposed-convolution layers
         self.deconv = nn.Sequential(
             torch.nn.ConvTranspose2d(in_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
             nn.InstanceNorm2d(mid_channels),
-            #nn.BatchNorm2d(mid_channels, affine=True, track_running_stats=True),
             nn.ReLU(),
             torch.nn.ConvTranspose2d(mid_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
             nn.InstanceNorm2d(out_channels),
-            #nn.BatchNorm2d(out_channels, affine=True, track_running_stats=True),
             nn.ReLU()
         )
 
@@ -186,22 +165,33 @@ class DeconvBlock(nn.Module):
 class Generator(nn.Module):
     def __init__(self, in_channels, out_channels, ngf, n_res_blocks):
         super(Generator, self).__init__()
-        self.mid_channels = ngf
-        self.conv1 = ConvBlock(in_channels, self.mid_channels, self.mid_channels*2)
-        self.conv2 = ConvBlock(self.mid_channels*2, self.mid_channels*4, self.mid_channels*6)
-        self.res_layers = nn.Sequential(*[ResnetBlock(self.mid_channels*6) for i in range(n_res_blocks)])
-        self.deconv1 = DeconvBlock(self.mid_channels*6, self.mid_channels*4, self.mid_channels*2)
-        self.deconv2 = DeconvBlock(self.mid_channels*2, self.mid_channels, out_channels)
+        # in_channels: the number of channels of the input
+        # ngf: the number of convolution filters of the first layer
+        # out_channels: the number of channels of the output
+        # n_res_blocks: the number of the resnet-based blocks
+        self.ngf = ngf
+        self.first_layer = nn.Sequential(nn.ReflectionPad2d(3),
+                                         nn.Conv2d(in_channels, ngf, 7),
+                                         nn.InstanceNorm2d(ngf),
+                                         nn.ReLU(inplace=True))
+        self.conv_block = ConvBlock(self.ngf, self.ngf*2, self.ngf*4)
+        self.res_layers = nn.Sequential(*[ResnetBlock(self.ngf*4) for i in range(n_res_blocks)])
+        self.deconv_block = DeconvBlock(self.ngf*4, self.ngf*2, self.ngf)
+        self.last_layer = nn.Sequential(nn.ReflectionPad2d(3),
+                                        nn.Conv2d(self.ngf, out_channels, 7),
+                                        nn.Tanh())
+                                        
         
     def forward(self, x):
         
-        h = self.conv1(x)
-        h = self.conv2(h)
+        h = self.first_layer(x)
+        h = self.conv_block(h)
         h = self.res_layers(h)
-        h = self.deconv1(h)
-        res = self.deconv2(h)
-
-        out = res + x
+        h = self.deconv_block(h)
+        res = self.last_layer(h)
+        
+        # residual path
+        out = res + x 
         return out
 
 
@@ -223,8 +213,7 @@ class Discriminator(nn.Module):
             nn.Conv2d(ndf*4, ndf*8, kernel_size=4, stride=1, bias=False),
             nn.InstanceNorm2d(ndf*8),
             nn.LeakyReLU(0.2,inplace=True),
-            nn.Conv2d(ndf*8, 1, kernel_size=4, stride=1, bias=False),     
-            nn.Sigmoid()               
+            nn.Conv2d(ndf*8, 1, kernel_size=4, stride=1, bias=False),      
         )
 
   
@@ -262,11 +251,11 @@ class Mean():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--path-data", type=str, default="/data2/youngju/CycleGAN/AAPM_data")
-    parser.add_argument("--path-checkpoint", type=str, default="/data2/youngju/CycleGAN/CT_denoising")
-    parser.add_argument("--model-name", type=str, default="cyclegan_v17")
-    parser.add_argument("--num_epoch", type=int, default=100)
+    parser.add_argument("--path-checkpoint", type=str, default="/data2/youngju/CycleGAN/Submission/CT_denoising") # path to save the model checkpoint
+    parser.add_argument("--model-name", type=str, default="cyclegan_v1")
+    parser.add_argument("--num_epoch", type=int, default=65)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=2e-4) # 2e-4,5
+    parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda:5")
     parser.add_argument("--G_ngf", type=int, default=32)
@@ -278,7 +267,8 @@ def main():
     parser.add_argument("--beta2", type=float, default=0.999)
   
     args = parser.parse_args()
-    path_result = join(args.path_checkpoint, args.model_name)
+    # path_result = join(args.path_checkpoint, args.model_name)
+    path_result = args.path_checkpoint
     if not os.path.isdir(path_result):
       os.makedirs(path_result)
     
@@ -287,7 +277,7 @@ def main():
         print(">>>", k, ":" , v)
         setattr(flags, k, v)
         
-    OmegaConf.save(flags, os.path.join(path_result, "config.yaml"))
+    OmegaConf.save(flags, os.path.join(path_result, "cyclegan_config.yaml")) # save the configuration
     
     random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -299,26 +289,20 @@ def main():
   
     in_channels = train_dataloader.dataset[0][0].shape[0]
     out_channels = train_dataloader.dataset[0][0].shape[0]
-    G_ngf = args.G_ngf
-    D_ndf = args.D_ndf
-    n_res_blocks = args.G_n_res_blocks
-  
+    G_ngf = args.G_ngf # the number of convolution filters of the first layer for the Generator
+    D_ndf = args.D_ndf # the number of convolution filters of the first layer for the Discriminator
+    n_res_blocks = args.G_n_res_blocks # the number of the ResNet-based blocks
+    
+    # Define the Generators and Discriminators
     G_F2Q = Generator(in_channels, out_channels, G_ngf, n_res_blocks).to(args.device)
     G_Q2F = Generator(in_channels, out_channels, G_ngf, n_res_blocks).to(args.device)
     D_F = Discriminator(in_channels, D_ndf).to(args.device)
     D_Q = Discriminator(in_channels, D_ndf).to(args.device)
     
-    
-
+    # Optimizer and Scheduler
     G_optim = torch.optim.Adam(itertools.chain(G_F2Q.parameters(), G_Q2F.parameters()), args.lr, betas=(args.beta1, args.beta2))
     D_optim = torch.optim.Adam(itertools.chain(D_F.parameters(), D_Q.parameters()), args.lr, betas=(args.beta1, args.beta2))
-    
-    #step_scheduler = torch.optim.lr_scheduler.StepLR(G_optim, step_size=1, gamma=0.96)
-    # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer=G_optim,
-    #                                     lr_lambda=lambda epoch: 0.96 ** (epoch+1),
-    #                                     last_epoch=-1,
-    #                                     verbose=False)
-    #scheduler = torch.optim.lr_scheduler.StepLR(G_optim, step_size=2, gamma=0.9)
+    step_scheduler = torch.optim.lr_scheduler.StepLR(G_optim, step_size=5, gamma=0.95)
 
     adv_loss = nn.MSELoss()
     cycle_loss = nn.L1Loss()
@@ -343,20 +327,12 @@ def main():
     
     for epoch in tqdm(range(trained_epoch, args.num_epoch), desc='Epoch', total=args.num_epoch, initial=trained_epoch):
         losses = {name: Mean() for name in loss_name}
-        e_G_adv_loss_F = []
-        e_G_adv_loss_Q = []
-        e_D_adv_loss_F = []
-        e_D_adv_loss_Q = []
         
         for x_F, x_Q, _ in tqdm(train_dataloader, desc='Step'):
             x_F = x_F.to(args.device)
             x_Q = x_Q.to(args.device)
             
-            # for p_F in G_Q2F.parameters():
-            #     p_F.requires_grad = True
-            # for p_Q in G_F2Q.parameters():
-            #     p_Q.requires_grad = True
-            
+            # Set 'requires_grad' of the discriminators as 'False'
             for p_F in D_F.parameters():
                 p_F.requires_grad = False
             for p_Q in D_Q.parameters():
@@ -378,42 +354,34 @@ def main():
             G_cycle_loss_Q = cycle_loss(x_QFQ, x_Q)
             G_iden_loss_F = iden_loss(x_FF, x_F)
             G_iden_loss_Q = iden_loss(x_QQ, x_Q)
-            #G_adv_loss = G_adv_loss_F + G_adv_loss_Q
             G_cycle_loss = G_cycle_loss_F + G_cycle_loss_Q
             G_iden_loss = G_iden_loss_F + G_iden_loss_Q
             G_total_loss = G_adv_loss_F + G_adv_loss_Q + args.lambda_cycle * (G_cycle_loss) + args.lambda_iden * (G_iden_loss)
-            e_G_adv_loss_F.append(G_adv_loss_F.item())
-            e_G_adv_loss_Q.append(G_adv_loss_Q.item())
-            #print(G_adv_loss.item())
             G_optim.zero_grad()
             G_total_loss.backward()
             G_optim.step()
-            #scheduler.step()
 
-                
+            # # Set 'requires_grad' of the discriminators as 'True'
             for p_F in D_F.parameters():
                 p_F.requires_grad = True
             for p_Q in D_Q.parameters():
                 p_Q.requires_grad = True
             
-            #x_FQ = G_F2Q(x_F)
-            #x_QF = G_Q2F(x_Q)
             D_F_x_F = D_F(x_F)
             D_Q_x_Q = D_Q(x_Q)
-            D_F_x_Q_F = D_F(x_QF.detach())
-            D_Q_x_F_Q = D_Q(x_FQ.detach())
+            D_F_x_Q_F = D_F(x_QF.detach()) # use detach() to prevent updating the generator
+            D_Q_x_F_Q = D_Q(x_FQ.detach()) # use detach() to prevent updating the generator
             D_adv_loss_F = adv_loss(D_F_x_F,torch.ones(D_F_x_F.size()).to(args.device)) + adv_loss(D_F_x_Q_F,torch.zeros(D_F_x_Q_F.size()).to(args.device))
             D_adv_loss_Q = adv_loss(D_Q_x_Q,torch.ones(D_Q_x_Q.size()).to(args.device)) + adv_loss(D_Q_x_F_Q,torch.zeros(D_Q_x_F_Q.size()).to(args.device))
             D_total_loss_F = D_adv_loss_F / 2.0
             D_total_loss_Q = D_adv_loss_Q / 2.0
-            e_D_adv_loss_F.append(D_adv_loss_F.item())
-            e_D_adv_loss_Q.append(D_adv_loss_Q.item())
             
             D_optim.zero_grad()
             D_total_loss_F.backward()
             D_total_loss_Q.backward()
             D_optim.step()
             
+            # Calculate the average loss during one epoch
             losses['G_adv_loss_F'](G_adv_loss_F.item())
             losses['G_adv_loss_Q'](G_adv_loss_Q.item())
             losses['G_cycle_loss_F'](G_cycle_loss_F.item())
@@ -422,21 +390,19 @@ def main():
             losses['G_iden_loss_Q'](G_iden_loss_Q.item())
             losses['D_adv_loss_F'](D_adv_loss_F.item())
             losses['D_adv_loss_Q'](D_adv_loss_Q.item())
+        
+        step_scheduler.step()
             
         for name in loss_name:
             losses_list[name].append(losses[name].result())
-            
+        
+        # Save the trained model and list of losses
         torch.save({'epoch': epoch + 1, 'G_F2Q_state_dict': G_F2Q.state_dict(), 'G_Q2F_state_dict': G_Q2F.state_dict(),
             'D_F_state_dict': D_F.state_dict(), 'D_Q_state_dict': D_Q.state_dict(),
-            'G_optim_state_dict': G_optim.state_dict(), 'D_optim_state_dict': D_optim.state_dict()}, join(path_result, args.model_name + f'_e-{epoch}.pth'))
+            'G_optim_state_dict': G_optim.state_dict(), 'D_optim_state_dict': D_optim.state_dict()}, join(path_result, args.model_name + f'.pth'))
         
         for name in loss_name:
             torch.save(losses_list[name], join(path_result, name + '.npy'))
-        
-        print(f'🔥🔥🔥🔥 ADV-LOSS-e-{epoch}: G_F: {np.mean(e_G_adv_loss_F)} / G_Q: {np.mean(e_G_adv_loss_Q)} / D_F: {np.mean(e_D_adv_loss_F)} / D_Q: {np.mean(e_D_adv_loss_Q)}')
-    
+
 if __name__ == "__main__":
     main()
-
-
-# https://daebaq27.tistory.com/111

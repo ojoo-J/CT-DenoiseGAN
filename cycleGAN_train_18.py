@@ -186,20 +186,26 @@ class DeconvBlock(nn.Module):
 class Generator(nn.Module):
     def __init__(self, in_channels, out_channels, ngf, n_res_blocks):
         super(Generator, self).__init__()
-        self.mid_channels = ngf
-        self.conv1 = ConvBlock(in_channels, self.mid_channels, self.mid_channels*2)
-        self.conv2 = ConvBlock(self.mid_channels*2, self.mid_channels*4, self.mid_channels*6)
-        self.res_layers = nn.Sequential(*[ResnetBlock(self.mid_channels*6) for i in range(n_res_blocks)])
-        self.deconv1 = DeconvBlock(self.mid_channels*6, self.mid_channels*4, self.mid_channels*2)
-        self.deconv2 = DeconvBlock(self.mid_channels*2, self.mid_channels, out_channels)
+        self.ngf = ngf
+        self.first_layer = nn.Sequential(nn.ReflectionPad2d(3),
+                                         nn.Conv2d(in_channels, ngf, 7),
+                                         nn.InstanceNorm2d(ngf),
+                                         nn.ReLU(inplace=True))
+        self.conv_block = ConvBlock(self.ngf, self.ngf*2, self.ngf*4)
+        self.res_layers = nn.Sequential(*[ResnetBlock(self.ngf*4) for i in range(n_res_blocks)])
+        self.deconv_block = DeconvBlock(self.ngf*4, self.ngf*2, self.ngf)
+        self.last_layer = nn.Sequential(nn.ReflectionPad2d(3),
+                                        nn.Conv2d(64, out_channels, 7),
+                                        nn.Tanh())
+                                        
         
     def forward(self, x):
         
-        h = self.conv1(x)
-        h = self.conv2(h)
+        h = self.first_layer(x)
+        h = self.conv_block(h)
         h = self.res_layers(h)
-        h = self.deconv1(h)
-        res = self.deconv2(h)
+        h = self.deconv_block(h)
+        res = self.last_layer(h)
 
         out = res + x
         return out
@@ -224,7 +230,7 @@ class Discriminator(nn.Module):
             nn.InstanceNorm2d(ndf*8),
             nn.LeakyReLU(0.2,inplace=True),
             nn.Conv2d(ndf*8, 1, kernel_size=4, stride=1, bias=False),     
-            nn.Sigmoid()               
+            #nn.Sigmoid()               
         )
 
   
@@ -263,13 +269,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--path-data", type=str, default="/data2/youngju/CycleGAN/AAPM_data")
     parser.add_argument("--path-checkpoint", type=str, default="/data2/youngju/CycleGAN/CT_denoising")
-    parser.add_argument("--model-name", type=str, default="cyclegan_v17")
+    parser.add_argument("--model-name", type=str, default="cyclegan_v18")
     parser.add_argument("--num_epoch", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=2e-4) # 2e-4,5
+    parser.add_argument("--lr", type=float, default=1e-4) # 2e-4,5
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda:5")
-    parser.add_argument("--G_ngf", type=int, default=32)
+    parser.add_argument("--G_ngf", type=int, default=64)
     parser.add_argument("--G_n_res_blocks", type=int, default=6)
     parser.add_argument("--D_ndf", type=int, default=64)
     parser.add_argument("--lambda_cycle", type=int, default=10)
@@ -312,13 +318,7 @@ def main():
 
     G_optim = torch.optim.Adam(itertools.chain(G_F2Q.parameters(), G_Q2F.parameters()), args.lr, betas=(args.beta1, args.beta2))
     D_optim = torch.optim.Adam(itertools.chain(D_F.parameters(), D_Q.parameters()), args.lr, betas=(args.beta1, args.beta2))
-    
-    #step_scheduler = torch.optim.lr_scheduler.StepLR(G_optim, step_size=1, gamma=0.96)
-    # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer=G_optim,
-    #                                     lr_lambda=lambda epoch: 0.96 ** (epoch+1),
-    #                                     last_epoch=-1,
-    #                                     verbose=False)
-    #scheduler = torch.optim.lr_scheduler.StepLR(G_optim, step_size=2, gamma=0.9)
+    step_scheduler = torch.optim.lr_scheduler.StepLR(G_optim, step_size=10, gamma=0.95)
 
     adv_loss = nn.MSELoss()
     cycle_loss = nn.L1Loss()
@@ -347,6 +347,8 @@ def main():
         e_G_adv_loss_Q = []
         e_D_adv_loss_F = []
         e_D_adv_loss_Q = []
+        e_G_cycle_loss = []
+        e_G_iden_loss = []
         
         for x_F, x_Q, _ in tqdm(train_dataloader, desc='Step'):
             x_F = x_F.to(args.device)
@@ -384,11 +386,13 @@ def main():
             G_total_loss = G_adv_loss_F + G_adv_loss_Q + args.lambda_cycle * (G_cycle_loss) + args.lambda_iden * (G_iden_loss)
             e_G_adv_loss_F.append(G_adv_loss_F.item())
             e_G_adv_loss_Q.append(G_adv_loss_Q.item())
+            e_G_cycle_loss.append(G_cycle_loss.item())
+            e_G_iden_loss.append(G_iden_loss.item())
             #print(G_adv_loss.item())
             G_optim.zero_grad()
             G_total_loss.backward()
             G_optim.step()
-            #scheduler.step()
+            step_scheduler.step()
 
                 
             for p_F in D_F.parameters():
@@ -434,9 +438,7 @@ def main():
             torch.save(losses_list[name], join(path_result, name + '.npy'))
         
         print(f'🔥🔥🔥🔥 ADV-LOSS-e-{epoch}: G_F: {np.mean(e_G_adv_loss_F)} / G_Q: {np.mean(e_G_adv_loss_Q)} / D_F: {np.mean(e_D_adv_loss_F)} / D_Q: {np.mean(e_D_adv_loss_Q)}')
-    
+        print(f'🔥🔥🔥🔥 etc-LOSS-e-{epoch}: G_cycle: {np.mean(e_G_cycle_loss)} / G_iden: {np.mean(e_G_iden_loss)}')
+
 if __name__ == "__main__":
     main()
-
-
-# https://daebaq27.tistory.com/111
