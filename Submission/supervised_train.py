@@ -257,11 +257,11 @@ def main():
   
     in_channels = train_dataloader.dataset[0][0].shape[0]
     out_channels = train_dataloader.dataset[0][0].shape[0]
-    G_ndf = args.G_ngf # the number of convolution filters of the first layer for Generator
+    G_ngf = args.G_ngf # the number of convolution filters of the first layer for Generator
     n_res_blocks = args.G_n_res_blocks # the number of the ResNet-based blocks
     
     # Define the Generator
-    G_Q2F = Generator(in_channels, out_channels, G_ndf, n_res_blocks).to(args.device)
+    G_Q2F = Generator(in_channels, out_channels, G_ngf, n_res_blocks).to(args.device)
     
     # Optimizer and Scheduler
     G_optim = torch.optim.Adam(G_Q2F.parameters(), args.lr, betas=(args.beta1, args.beta2))
