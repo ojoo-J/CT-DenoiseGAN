@@ -1,5 +1,5 @@
 # Unsupervised CT Denoising with CycleGAN 
-**[[📝 Report Link](https://drive.google.com/file/d/1oxQ0zbWGOuGPZ2Kt7D7ziQF5t8o_pcu1/view?usp=share_link)]**
+**[[📝 Report](https://drive.google.com/file/d/1oxQ0zbWGOuGPZ2Kt7D7ziQF5t8o_pcu1/view?usp=share_link)]**
 
 This project involves the task of converting noisy input, specifically low-dose images, into high-dose images. The American Association of Physicists in Medicine (AAPM) dataset was utilized for CT image denoising tasks.
 
